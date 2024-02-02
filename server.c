@@ -9,12 +9,15 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 
+#include <errno.h>
+
 /**
  * Project 1 starter code
  * All parts needed to be changed/added are marked with TODO
  */
 
 #define BUFFER_SIZE 1024
+#define CONTENT_SIZE 2000000
 #define DEFAULT_SERVER_PORT 8081
 #define DEFAULT_REMOTE_HOST "131.179.176.34"
 #define DEFAULT_REMOTE_PORT 5001
@@ -142,16 +145,34 @@ void handle_request(struct server_app *app, int client_socket) {
     char *request = malloc(strlen(buffer) + 1);
     strcpy(request, buffer);
 
+    //printf("Header: %s", request);
+
     // TODO: Parse the header and extract essential fields, e.g. file name
     // Hint: if the requested path is "/" (root), default to index.html
-    char file_name[] = "index.html";
+    char* file_name;
 
+    char* header_token = strtok(request, " \n\t");
+    header_token = strtok(NULL, " \n\t");
+
+    if (strcmp(header_token, "/") == 0)
+    {
+        file_name = "index.html";
+    }
+
+    else
+    {
+        file_name = header_token + 1;
+    }
+
+    printf("Requested file name: %s\n", file_name);
+    
     // TODO: Implement proxy and call the function under condition
     // specified in the spec
     // if (need_proxy(...)) {
     //    proxy_remote_file(app, client_socket, file_name);
     // } else {
     serve_local_file(client_socket, file_name);
+    free(request);
     //}
 }
 
@@ -167,13 +188,79 @@ void serve_local_file(int client_socket, const char *path) {
     // (When the requested file does not exist):
     // * Generate a correct response
 
-    char response[] = "HTTP/1.0 200 OK\r\n"
-                      "Content-Type: text/plain; charset=UTF-8\r\n"
-                      "Content-Length: 15\r\n"
-                      "\r\n"
-                      "Sample response";
+    unsigned char* content_type;
+    unsigned char content[CONTENT_SIZE];
+    unsigned int content_length;
 
-    send(client_socket, response, strlen(response), 0);
+    unsigned char response[2 * CONTENT_SIZE] = "HTTP/1.0 200 OK\r\n";
+
+    FILE* fptr;
+
+    printf("Opening %s\n", path);
+
+    fptr = fopen(path, "r");
+
+    if (!fptr && errno == ENOENT)
+    {
+      // Implement 404 error.
+      printf("Error opening %s\n", path);
+    }
+
+    else
+    {
+        printf("Opened %s\n", path);
+        char* file_extension = strrchr(path, '.');
+
+        if (file_extension)
+        {
+            if (strcmp(file_extension, ".html") == 0)
+            {
+                printf("Detected file extension .html\n");
+                content_type = "Content-Type: text/html; charset=UTF-8\r\n";
+            }
+
+            else if (strcmp(file_extension, ".txt") == 0)
+            {
+                printf("Detected file extension .txt\n");
+                content_type = "Content-Type: text/plain; charset=UTF-8\r\n";
+            }
+
+            else if (strcmp(file_extension, ".jpg") == 0)
+            {
+                printf("Detected file extension .jpg\n");
+                content_type = "Content-Type: image/jpeg\r\n";
+            }
+
+            else
+            {
+                printf("Detected binary file\n");
+                content_type = "Content-Type: application/octet-stream\r\n";
+            }
+        }
+
+        else
+        {
+            printf("Detected binary file\n");
+            content_type = "Content-Type: application/octet-stream\r\n";
+        }
+
+        printf("Reading %s\n", path);
+        content_length = fread(content, sizeof content[0], CONTENT_SIZE, fptr);
+
+        fclose(fptr);
+    }
+
+    char content_length_text[BUFFER_SIZE];
+    sprintf(content_length_text, "Content-Length: %u\r\n\r\n", content_length);
+
+    strcat(response, content_type);
+    strcat(response, content_length_text);
+
+    int precontent_response_length = strlen(response);
+
+    memcpy(response + strlen(response), content, content_length);
+
+    send(client_socket, response, precontent_response_length + content_length, 0);
 }
 
 void proxy_remote_file(struct server_app *app, int client_socket, const char *request) {
