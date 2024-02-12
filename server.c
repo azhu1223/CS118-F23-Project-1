@@ -38,7 +38,7 @@ void parse_args(int argc, char *argv[], struct server_app *app);
 
 // The following functions need to be updated
 void handle_request(struct server_app *app, int client_socket);
-void serve_local_file(int client_socket, const char *path);
+void serve_local_file(int client_socket, const char *path, FILE *fptr);
 void proxy_remote_file(struct server_app *app, int client_socket, const char *path);
 
 // The main function is provided and no change is needed
@@ -145,7 +145,7 @@ void handle_request(struct server_app *app, int client_socket) {
     char *request = malloc(strlen(buffer) + 1);
     strcpy(request, buffer);
 
-    //printf("Header: %s", request);
+    // printf("Header: %s", request);
 
     // TODO: Parse the header and extract essential fields, e.g. file name
     // Hint: if the requested path is "/" (root), default to index.html
@@ -164,19 +164,58 @@ void handle_request(struct server_app *app, int client_socket) {
         file_name = header_token + 1;
     }
 
+    char* percent_escape_pointer;
+
+    while ((percent_escape_pointer = strstr(file_name, "%20")))
+    {
+        percent_escape_pointer[0] = ' ';
+
+        for (percent_escape_pointer++; *percent_escape_pointer; percent_escape_pointer++)
+        {
+            percent_escape_pointer[0] = percent_escape_pointer[2];
+        }
+    }
+
+    while ((percent_escape_pointer = strstr(file_name, "%25")))
+    {
+        percent_escape_pointer[0] = '%';
+
+        for (percent_escape_pointer++; *percent_escape_pointer; percent_escape_pointer++)
+        {
+            percent_escape_pointer[0] = percent_escape_pointer[2];
+        }
+    }
+
     printf("Requested file name: %s\n", file_name);
+
+    if (strcmp(file_name, "output2.ts") == 0)
+    {
+        printf("This is output2!\n");
+    }
+
+    printf("Opening %s\n", file_name);
+
+    FILE* fptr = fopen(file_name, "rb");
     
     // TODO: Implement proxy and call the function under condition
     // specified in the spec
-    // if (need_proxy(...)) {
-    //    proxy_remote_file(app, client_socket, file_name);
-    // } else {
-    serve_local_file(client_socket, file_name);
+    if (fptr) 
+    {
+        printf("Found %s. Sending file.\n", file_name);
+        serve_local_file(client_socket, file_name, fptr);
+        fclose(fptr);
+    } 
+    
+    else 
+    {
+        printf("Did not find %s locally. Asking remote for it.\n", file_name);
+        proxy_remote_file(app, client_socket, buffer);
+    }
+
     free(request);
-    //}
 }
 
-void serve_local_file(int client_socket, const char *path) {
+void serve_local_file(int client_socket, const char *path, FILE *fptr) {
     // TODO: Properly implement serving of local files
     // The following code returns a dummy response for all requests
     // but it should give you a rough idea about what a proper response looks like
@@ -190,52 +229,31 @@ void serve_local_file(int client_socket, const char *path) {
 
     unsigned char* content_type;
     unsigned char content[CONTENT_SIZE];
-    unsigned int content_length;
+    unsigned int content_length = 0;
+    int precontent_response_length;
 
-    unsigned char response[2 * CONTENT_SIZE] = "HTTP/1.0 200 OK\r\n";
+    unsigned char response[2 * CONTENT_SIZE] = "";
+    
+    char* file_extension = strrchr(path, '.');
 
-    FILE* fptr;
-
-    printf("Opening %s\n", path);
-
-    fptr = fopen(path, "r");
-
-    if (!fptr && errno == ENOENT)
+    if (file_extension)
     {
-      // Implement 404 error.
-      printf("Error opening %s\n", path);
-    }
-
-    else
-    {
-        printf("Opened %s\n", path);
-        char* file_extension = strrchr(path, '.');
-
-        if (file_extension)
+        if (strcmp(file_extension, ".html") == 0)
         {
-            if (strcmp(file_extension, ".html") == 0)
-            {
-                printf("Detected file extension .html\n");
-                content_type = "Content-Type: text/html; charset=UTF-8\r\n";
-            }
+            printf("Detected file extension .html\n");
+            content_type = "Content-Type: text/html; charset=UTF-8\r\n";
+        }
 
-            else if (strcmp(file_extension, ".txt") == 0)
-            {
-                printf("Detected file extension .txt\n");
-                content_type = "Content-Type: text/plain; charset=UTF-8\r\n";
-            }
+        else if (strcmp(file_extension, ".txt") == 0)
+        {
+            printf("Detected file extension .txt\n");
+            content_type = "Content-Type: text/plain; charset=UTF-8\r\n";
+        }
 
-            else if (strcmp(file_extension, ".jpg") == 0)
-            {
-                printf("Detected file extension .jpg\n");
-                content_type = "Content-Type: image/jpeg\r\n";
-            }
-
-            else
-            {
-                printf("Detected binary file\n");
-                content_type = "Content-Type: application/octet-stream\r\n";
-            }
+        else if (strcmp(file_extension, ".jpg") == 0)
+        {
+            printf("Detected file extension .jpg\n");
+            content_type = "Content-Type: image/jpeg\r\n";
         }
 
         else
@@ -243,20 +261,25 @@ void serve_local_file(int client_socket, const char *path) {
             printf("Detected binary file\n");
             content_type = "Content-Type: application/octet-stream\r\n";
         }
-
-        printf("Reading %s\n", path);
-        content_length = fread(content, sizeof content[0], CONTENT_SIZE, fptr);
-
-        fclose(fptr);
     }
+
+    else
+    {
+        printf("Detected binary file\n");
+        content_type = "Content-Type: application/octet-stream\r\n";
+    }
+
+    printf("Reading %s\n", path);
+    content_length = fread(content, sizeof content[0], CONTENT_SIZE, fptr);
 
     char content_length_text[BUFFER_SIZE];
     sprintf(content_length_text, "Content-Length: %u\r\n\r\n", content_length);
 
+    strcat(response, "HTTP/1.0 200 OK\r\n");
     strcat(response, content_type);
     strcat(response, content_length_text);
 
-    int precontent_response_length = strlen(response);
+    precontent_response_length = strlen(response);
 
     memcpy(response + strlen(response), content, content_length);
 
@@ -273,6 +296,70 @@ void proxy_remote_file(struct server_app *app, int client_socket, const char *re
     // * When connection to the remote server fail, properly generate
     // HTTP 502 "Bad Gateway" response
 
-    char response[] = "HTTP/1.0 501 Not Implemented\r\n\r\n";
-    send(client_socket, response, strlen(response), 0);
+    printf("Entered proxy remote file.\n");
+    unsigned char response[3 * CONTENT_SIZE];
+    struct sockaddr_in remote_addr;
+
+    remote_addr.sin_family = AF_INET;
+    remote_addr.sin_port = htons(app->remote_port);
+
+    printf("Creating remote socket.\n");
+
+    int remote_socket = socket(AF_INET, SOCK_STREAM, 0);
+
+    printf("Converting address string to binary.\n");
+    if (inet_pton(AF_INET, app->remote_host, &remote_addr.sin_addr)<=0)
+    {
+        printf("\n inet_pton error occured\n");
+        exit(EXIT_FAILURE);
+    } 
+
+    int header_bytes_read;
+    int total_content_bytes_read;
+
+    printf("Connecting to remote.\n");
+    if (connect(remote_socket, (struct sockaddr*)&remote_addr, sizeof (remote_addr)) == -1)
+    {
+        char* header = "HTTP/1.0 502 BAD GATEWAY\r\n\r\n";
+        strcpy(response, header);
+
+        header_bytes_read = strlen(header);
+    }
+
+    else
+    {
+        printf("Sending request to remote.\n");
+        send(remote_socket, request, strlen(request), 0);
+
+        printf("Reading remote response.\n");
+        header_bytes_read = recv(remote_socket, response, CONTENT_SIZE, 0);
+
+        //response[header_bytes_read] = '\0';
+
+        // printf("Header: %s\n", response);
+
+        unsigned char* content = response + header_bytes_read;
+
+        int content_bytes_read = recv(remote_socket, content, CONTENT_SIZE, 0);
+
+        total_content_bytes_read = content_bytes_read;
+
+        while (content_bytes_read > 0)
+        {
+            printf("Read %u bytes of content.\n", content_bytes_read);
+            content += content_bytes_read;
+            content_bytes_read = recv(remote_socket, content, CONTENT_SIZE, 0);
+            total_content_bytes_read += content_bytes_read;
+        }
+
+        printf("Content size: %u\n", total_content_bytes_read);
+
+        //printf("HTML Message: %s\n", response);
+
+        printf("Forward response from remote to client.\n");
+
+        close(remote_socket);
+    }
+
+    send(client_socket, response, header_bytes_read + total_content_bytes_read, 0);
 }
